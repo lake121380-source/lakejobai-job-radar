@@ -679,6 +679,7 @@ class BossScraper:
         edu: Optional[int] = None,         # 学历 code (内部参数名, URL 映射为 degree)
         scale: Optional[int] = None,      # 公司规模 code
         stage: Optional[int] = None,      # 融资阶段 code
+        area_business: Optional[str] = None,  # 区县筛选: 逗号分隔的区名或 6 位区 code
     ):
         """搜索关键词，返回岗位列表。
 
@@ -708,13 +709,13 @@ class BossScraper:
             "query": keyword,
             "city": city_code,
         }
-        # jobType: BOSS URL 用 4 位 code (1901=全职, 1903=兼职)
-        # 注意: 不是 "1"/"2"/"3", 也不是 "full"/"part"/"practice"
-        # 证据: CareerAI/Job-Hunting-Agent/OpenLOA 等多个 GitHub 项目 + 用户验证
+        # jobType: BOSS URL 用 4 位 code (1901=全职, 1902=实习, 1903=兼职)
+        # 前端语义 "1"/"2"/"3" → 1901/1902/1903; 也支持 4 位 code 直传
+        # 证据: CareerAI/Job-Hunting-Agent/OpenLOA 等多个 GitHub 项目 + 实测(jobType=1902 返回 ~75% 实习岗)
         if job_type:
-            _type_code_map = {"full": "1901", "part": "1903",
-                              "1": "1901", "2": "1903",
-                              "1901": "1901", "1903": "1903"}
+            _type_code_map = {"full": "1901", "part": "1903", "practice": "1902",
+                              "1": "1901", "2": "1903", "3": "1902",
+                              "1901": "1901", "1902": "1902", "1903": "1903"}
             params["jobType"] = _type_code_map.get(job_type, job_type)
         if salary:
             params["salary"] = salary
@@ -728,7 +729,25 @@ class BossScraper:
         if stage is not None:
             params["stage"] = str(stage)
 
-        url = "https://www.zhipin.com/web/geek/job?" + urlencode(params)
+        # 区县筛选: 前端传逗号分隔的区名或 6 位区 code, 解析后拼 multiBusinessDistrict 重复参数
+        district_codes: list[str] = []
+        if area_business:
+            for item in (a.strip() for a in str(area_business).split(",") if a.strip()):
+                if item.isdigit() and len(item) >= 6:
+                    code = item
+                else:
+                    try:
+                        from boss_geo import resolve_district_code
+                    except Exception:
+                        resolve_district_code = None
+                    code = (resolve_district_code(city_code, item) or "") if resolve_district_code else ""
+                if code and code not in district_codes:
+                    district_codes.append(code)
+
+        qparams = list(params.items())
+        for dc in district_codes:
+            qparams.append(("multiBusinessDistrict", dc))
+        url = "https://www.zhipin.com/web/geek/job?" + urlencode(qparams)
         log.info(f"搜索URL: {url}")
         self.page.goto(url, wait_until="domcontentloaded", timeout=45000)
         loaded_count = self._wait_for_jobs_loaded(min_count=10, max_wait_s=15)
